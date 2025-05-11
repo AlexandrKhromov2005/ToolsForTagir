@@ -22,14 +22,17 @@ def parse_file(file_path):
 def process_folder_averages(input_folder):
     all_files = glob.glob(os.path.join(input_folder, "results_*.txt"))
     aggregated = defaultdict(lambda: defaultdict(list))
+    attack_order = []  # Сохраняем порядок атак
     
     for file in all_files:
         file_data = parse_file(file)
         for attack, metrics in file_data.items():
+            if attack not in attack_order:  # Сохраняем порядок появления атак
+                attack_order.append(attack)
             for metric, values in metrics.items():
                 aggregated[attack][metric].extend(values)
     
-    return aggregated
+    return aggregated, attack_order
 
 def collect_all_attacks(base_dir):
     all_attacks = set()
@@ -61,7 +64,7 @@ def generate_report(base_dir, attack_name, output_file):
 
     for folder in folders:
         input_folder = os.path.join(base_dir, folder)
-        data = process_folder_averages(input_folder)
+        data, _ = process_folder_averages(input_folder)
         
         # Для таблицы без атак
         no_attack_psnr = calculate_metric_average(data.get("No attack", {}).get("PSNR", []))
@@ -107,14 +110,17 @@ def main_menu():
         for folder in folders:
             input_folder = os.path.join(base_dir, folder)
             output_file = os.path.join(output_dir, f"average_{folder}.txt")
-            aggregated = process_folder_averages(input_folder)
+            aggregated, attack_order = process_folder_averages(input_folder)
             
             with open(output_file, 'w', encoding='utf-8') as out:
-                for attack in sorted(aggregated.keys()):
+                for attack in attack_order:  # Используем сохраненный порядок атак
                     out.write(f"Attack: {attack}\n")
-                    for metric in ["MSE", "PSNR", "NCC", "BER", "SSIM"]:
+                    metrics = ["MSE", "PSNR", "NCC", "BER", "SSIM"]
+                    for metric in metrics:
                         values = aggregated[attack].get(metric, [])
                         if not values:
+                            # Если метрика отсутствует, записываем это в файл
+                            out.write(f"Average {metric}: N/A\n")
                             continue
                         avg = [sum(col)/len(col) for col in zip(*values)]
                         avg_str = " ".join(f"{x:.6f}" for x in avg)
