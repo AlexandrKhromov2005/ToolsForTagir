@@ -3,6 +3,9 @@ import glob
 import re
 import pandas as pd
 from collections import defaultdict
+import tkinter as tk
+from tkinter import ttk
+from tkinter import messagebox
 
 def parse_file(file_path):
     data = defaultdict(list)
@@ -57,16 +60,16 @@ def calculate_metric_average(values):
     flat_values = [num for sublist in values for num in sublist]
     return sum(flat_values) / len(flat_values)
 
-def generate_report(base_dir, attack_name, output_file):
+def generate_report(base_dir, attack_names, output_file):
     folders = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
+    reports_data = {attack: [] for attack in attack_names}
     report_data_no_attack = []
-    report_data_selected_attack = []
 
     for folder in folders:
         input_folder = os.path.join(base_dir, folder)
         data, _ = process_folder_averages(input_folder)
         
-        # Для таблицы без атак
+        # Для таблицы без атак (всегда добавляем)
         no_attack_psnr = calculate_metric_average(data.get("No attack", {}).get("PSNR", []))
         no_attack_ber = calculate_metric_average(data.get("No attack", {}).get("BER", []))
         report_data_no_attack.append({
@@ -75,23 +78,116 @@ def generate_report(base_dir, attack_name, output_file):
             'BER': no_attack_ber
         })
         
-        # Для таблицы с выбранной атакой
-        attack_psnr = calculate_metric_average(data.get(attack_name, {}).get("PSNR", []))
-        attack_ber = calculate_metric_average(data.get(attack_name, {}).get("BER", []))
-        report_data_selected_attack.append({
-            'Folder': folder,
-            'PSNR': attack_psnr,
-            'BER': attack_ber
-        })
-    
-    # Создаем DataFrame
-    df_no_attack = pd.DataFrame(report_data_no_attack)
-    df_attack = pd.DataFrame(report_data_selected_attack)
+        # Для каждой выбранной атаки
+        for attack_name in attack_names:
+            attack_psnr = calculate_metric_average(data.get(attack_name, {}).get("PSNR", []))
+            attack_ber = calculate_metric_average(data.get(attack_name, {}).get("BER", []))
+            reports_data[attack_name].append({
+                'Folder': folder,
+                'PSNR': attack_psnr,
+                'BER': attack_ber
+            })
     
     # Сохраняем в Excel
     with pd.ExcelWriter(output_file) as writer:
+        # Сначала записываем No attack
+        df_no_attack = pd.DataFrame(report_data_no_attack)
         df_no_attack.to_excel(writer, sheet_name='No Attack', index=False)
-        df_attack.to_excel(writer, sheet_name=attack_name, index=False)
+        
+        # Затем все выбранные атаки
+        for attack_name in attack_names:
+            df_attack = pd.DataFrame(reports_data[attack_name])
+            df_attack.to_excel(writer, sheet_name=attack_name, index=False)
+
+def show_attack_selector(all_attacks, base_dir, output_dir):
+    # Создаем основное окно
+    root = tk.Tk()
+    root.title("Select Attacks")
+    root.geometry("400x600")  # Увеличиваем высоту окна
+    
+    # Создаем основной фрейм
+    main_frame = ttk.Frame(root)
+    main_frame.pack(fill=tk.BOTH, expand=1, padx=10, pady=10)
+    
+    # Заголовок
+    ttk.Label(main_frame, text="Select attacks to include in the report:", 
+              font=('Helvetica', 10, 'bold')).pack(pady=10)
+    
+    # Создаем фрейм для прокручиваемого содержимого
+    scroll_frame = ttk.Frame(main_frame)
+    scroll_frame.pack(fill=tk.BOTH, expand=1)
+    
+    # Создаем холст с полосой прокрутки
+    canvas = tk.Canvas(scroll_frame)
+    scrollbar = ttk.Scrollbar(scroll_frame, orient="vertical", command=canvas.yview)
+    
+    # Создаем фрейм внутри холста для чекбоксов
+    checkbox_frame = ttk.Frame(canvas)
+    
+    # Настраиваем прокрутку
+    checkbox_frame.bind(
+        "<Configure>",
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+    
+    # Размещаем элементы прокрутки
+    canvas.create_window((0, 0), window=checkbox_frame, anchor="nw", width=canvas.winfo_reqwidth())
+    canvas.configure(yscrollcommand=scrollbar.set)
+    
+    # Размещаем холст и полосу прокрутки
+    canvas.pack(side="left", fill=tk.BOTH, expand=1)
+    scrollbar.pack(side="right", fill="y")
+    
+    # Настраиваем прокрутку колесиком мыши
+    def _on_mousewheel(event):
+        canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+    canvas.bind_all("<MouseWheel>", _on_mousewheel)
+    
+    # Переменные для хранения состояния чекбоксов
+    var_dict = {}
+    
+    # Создаем чекбоксы для каждой атаки
+    for attack in all_attacks:
+        var = tk.BooleanVar()
+        var_dict[attack] = var
+        ttk.Checkbutton(checkbox_frame, text=attack, variable=var).pack(anchor='w', padx=20, pady=2)
+    
+    def process_selection():
+        selected_attacks = [attack for attack, var in var_dict.items() if var.get()]
+        if not selected_attacks:
+            messagebox.showwarning("Warning", "Please select at least one attack!")
+            return
+            
+        output_file = os.path.join(output_dir, f"attack_report_multiple.xlsx")
+        generate_report(base_dir, selected_attacks, output_file)
+        messagebox.showinfo("Success", f"Report saved to: {output_file}")
+        root.destroy()
+    
+    def select_all():
+        for var in var_dict.values():
+            var.set(True)
+    
+    def deselect_all():
+        for var in var_dict.values():
+            var.set(False)
+    
+    # Создаем нижний фрейм для кнопок (вне области прокрутки)
+    bottom_frame = ttk.Frame(main_frame)
+    bottom_frame.pack(fill=tk.X, pady=10)
+    
+    # Кнопки управления
+    button_frame = ttk.Frame(bottom_frame)
+    button_frame.pack()
+    
+    ttk.Button(button_frame, text="Select All", command=select_all).pack(side=tk.LEFT, padx=5)
+    ttk.Button(button_frame, text="Deselect All", command=deselect_all).pack(side=tk.LEFT, padx=5)
+    
+    # Кнопка генерации отчета
+    ttk.Button(main_frame, text="Generate Report", 
+              command=process_selection).pack(pady=10)
+    
+    # Запускаем главный цикл
+    root.mainloop()
 
 def main_menu():
     print("Select operating mode:")
@@ -128,25 +224,11 @@ def main_menu():
                     out.write("\n")
         
         print("Mode 1: Average calculation completed")
-    
+        
     elif choice == '2':
-        # Режим 2: генерация отчетов по атакам
+        # Режим 2: генерация отчетов по атакам через GUI
         all_attacks = collect_all_attacks(base_dir)
-        
-        print("\nAvailable attacks:")
-        for i, attack in enumerate(all_attacks, 1):
-            print(f"{i}. {attack}")
-        
-        try:
-            selection = int(input("\nEnter attack number: ")) - 1
-            selected_attack = all_attacks[selection]
-        except (ValueError, IndexError):
-            print("Error: Invalid attack number entered")
-            return
-        
-        output_file = os.path.join(output_dir, f"attack_report_{selected_attack}.xlsx")
-        generate_report(base_dir, selected_attack, output_file)
-        print(f"\nThe report is saved to file: {output_file}")
+        show_attack_selector(all_attacks, base_dir, output_dir)
     
     else:
         print("Error: Incorrect mode selection")
