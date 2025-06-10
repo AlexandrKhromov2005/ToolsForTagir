@@ -56,8 +56,10 @@ def collect_all_attacks(base_dir):
 
 def calculate_metric_average(values):
     if not values:
-        return None
+        return 0.0
     flat_values = [num for sublist in values for num in sublist]
+    if not flat_values:
+        return 0.0
     return sum(flat_values) / len(flat_values)
 
 def generate_report(base_dir, attack_names, output_file):
